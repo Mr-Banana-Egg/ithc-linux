@@ -2,8 +2,6 @@
 
 #include "ithc.h"
 
-MODULE_DESCRIPTION("Intel Touch Host Controller driver");
-MODULE_LICENSE("Dual BSD/GPL");
 
 static const struct pci_device_id ithc_pci_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_THC_LKF_PORT1) },
@@ -381,6 +379,12 @@ static int ithc_resume(struct device *dev)
 {
 	struct pci_dev *pci = to_pci_dev(dev);
 	pci_dbg(pci, "pm resume\n");
+
+	/* schedule async startup so resume doesn't block; if scheduling fails, do it synchronously */
+	if (ithc_schedule_start_async(pci) == 0)
+		return 0;
+
+	/* fallback: try synchronous start (keeps current behavior if allocation fails) */
 	return ithc_start(pci);
 }
 
@@ -396,6 +400,10 @@ static int ithc_thaw(struct device *dev)
 {
 	struct pci_dev *pci = to_pci_dev(dev);
 	pci_dbg(pci, "pm thaw\n");
+
+	if (ithc_schedule_start_async(pci) == 0)
+		return 0;
+
 	return ithc_start(pci);
 }
 
@@ -404,6 +412,66 @@ static int ithc_restore(struct device *dev)
 	struct pci_dev *pci = to_pci_dev(dev);
 	pci_dbg(pci, "pm restore\n");
 	return ithc_start(pci);
+}
+
+/* Async resume helper:
+ * Schedule ithc_start() on a workqueue so the resume callback can return
+ * immediately and the kernel continue boot/resume. We take a device and
+ * module reference while the work is pending to avoid races with device
+ * removal or module unload.
+ */
+struct ithc_resume_work {
+	struct work_struct work;
+	struct pci_dev *pci;
+};
+
+static void ithc_resume_work_fn(struct work_struct *work)
+{
+	struct ithc_resume_work *rw = container_of(work, struct ithc_resume_work, work);
+	struct pci_dev *pci = rw->pci;
+
+	/* If driver was unbound in the meantime, abort. */
+	if (pci->driver != &ithc_driver.driver) {
+		pci_dbg(pci, "async resume aborted: driver unbound\n");
+		goto out;
+	}
+
+	if (ithc_start(pci))
+		pci_err(pci, "async resume: ithc_start failed\n");
+
+out:
+	put_device(&pci->dev);
+	module_put(THIS_MODULE);
+	kfree(rw);
+}
+
+static int ithc_schedule_start_async(struct pci_dev *pci)
+{
+	struct ithc_resume_work *rw;
+
+	/* Try to allocate without sleeping; if allocation fails, caller will
+	 * fallback to synchronous start so resume doesn't hang.
+	 */
+	rw = kmalloc(sizeof(*rw), GFP_ATOMIC);
+	if (!rw)
+		return -ENOMEM;
+
+	/* Prevent module from being freed while work runs. If we can't get a
+	 * module reference, abort scheduling.
+	 */
+	if (!try_module_get(THIS_MODULE)) {
+		kfree(rw);
+		return -ENODEV;
+	}
+
+	/* Prevent device from being freed while work runs. */
+	get_device(&pci->dev);
+
+	rw->pci = pci;
+	INIT_WORK(&rw->work, ithc_resume_work_fn);
+	schedule_work(&rw->work);
+
+	return 0;
 }
 
 static struct pci_driver ithc_driver = {
@@ -435,4 +503,3 @@ static void __exit ithc_exit(void)
 
 module_init(ithc_init);
 module_exit(ithc_exit);
-
