@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-2-Clause
 
 #include "ithc.h"
+MODULE_DESCRIPTION("Intel Touch Host Controller driver");
+MODULE_LICENSE("Dual BSD/GPL");
 
 
 static const struct pci_device_id ithc_pci_tbl[] = {
