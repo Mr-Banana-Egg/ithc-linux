@@ -16,7 +16,8 @@
 #include <linux/poll.h>
 #include <linux/timer.h>
 #include <linux/vmalloc.h>
-
+#include <linux/workqueue.h>
+#include <linux/slab.h>
 #define DEVNAME "ithc"
 #define DEVFULLNAME "Intel Touch Host Controller"
 
