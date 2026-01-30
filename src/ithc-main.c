@@ -54,6 +54,12 @@ static bool ithc_log_regs_enabled = false;
 module_param_named(logregs, ithc_log_regs_enabled, bool, 0);
 MODULE_PARM_DESC(logregs, "Log changes in register values (for debugging)");
 
+// Forward declarations so resume/thaw/restore can call the async helper
+// and the worker can compare pci->driver against the static driver symbol
+// even though the helper and the driver definition appear later in this file.
+static int ithc_schedule_start_async(struct pci_dev *pci);
+static struct pci_driver ithc_driver;
+
 // Interrupts/polling
 
 static void ithc_disable_interrupts(struct ithc *ithc)
@@ -411,6 +417,10 @@ static int ithc_restore(struct device *dev)
 {
 	struct pci_dev *pci = to_pci_dev(dev);
 	pci_dbg(pci, "pm restore\n");
+
+	if (ithc_schedule_start_async(pci) == 0)
+		return 0;
+
 	return ithc_start(pci);
 }
 
